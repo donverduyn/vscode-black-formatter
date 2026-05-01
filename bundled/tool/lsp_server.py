@@ -246,8 +246,32 @@ def _get_filename_for_black(document: TextDocument) -> str:
     doc_path = _get_document_path(document)
     if document.uri.startswith("vscode-notebook-cell") and doc_path.endswith(".ipynb"):
         # Treat the cell like a python file
-        return str(pathlib.Path(doc_path).with_suffix(".py"))
+        doc_path = str(pathlib.Path(doc_path).with_suffix(".py"))
+
+    # Guard against dev-container tunnel paths whose first component exceeds
+    # the OS NAME_MAX (255 bytes), which causes black to crash with ENAMETOOLONG
+    # when it tries to stat() the --stdin-filename path to find pyproject.toml.
+    # Fall back to a synthetic local path that preserves the filename so black
+    # can still apply the correct language rules.
+    _NAME_MAX = 255
+    try:
+        parts = pathlib.Path(doc_path).parts
+    except (TypeError, ValueError):
+        parts = []
+    if any(len(p) > _NAME_MAX for p in parts):
+        # Use the workspace root if available, otherwise cwd, keeping the basename.
+        ws_paths = [
+            s.get("cwd") or s.get("workspaceFS", "")
+            for s in WORKSPACE_SETTINGS.values()
+        ]
+        base = next(
+            (p for p in ws_paths if p and not any(len(c) > _NAME_MAX for c in pathlib.Path(p).parts)),
+            os.getcwd(),
+        )
+        doc_path = str(pathlib.Path(base) / pathlib.Path(doc_path).name)
+
     return doc_path
+
 
 
 def _get_line_endings(lines: list[str]) -> str:
